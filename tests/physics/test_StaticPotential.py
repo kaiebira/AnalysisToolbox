@@ -9,6 +9,7 @@
 
 from latqcdtools.physics.staticPotential import impdist
 from latqcdtools.testing import print_results, concludeTest
+import timeit
 import latqcdtools.base.logger as logger
 
 
@@ -77,4 +78,26 @@ def testStaticPotential():
 
 
 if __name__ == '__main__':
-    testStaticPotential()
+    elapsed_time = timeit.timeit(testStaticPotential, number=1)
+    logger.info(f"Execution time: {elapsed_time:.4f} seconds")
+    # Time multiple runs
+    times = []
+    for i in range(102):  # 102 runs, first 2 will be discarded
+        elapsed_time = timeit.timeit(testStaticPotential, number=1)
+        if i >= 2:  # Skip first 2 runs
+            times.append(elapsed_time)
+
+    # Calculate average
+    avg_time = sum(times) / len(times)
+
+    # Create histogram
+    import matplotlib.pyplot as plt
+    plt.figure()
+    plt.hist(times, bins=20, edgecolor='black')
+    plt.axvline(avg_time, color='r', linestyle='dashed', label=f'Mean: {avg_time:.4f}s')
+    plt.xlabel('Execution Time (seconds)')
+    plt.ylabel('Frequency')
+    plt.title('Static Potential Test Execution Times (numba)')
+    plt.legend()
+    plt.savefig('timing_histogram.pdf')
+    plt.close()

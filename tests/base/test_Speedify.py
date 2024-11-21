@@ -14,9 +14,9 @@ from latqcdtools.base.speedify import parallel_function_eval, parallel_reduce, c
 
 logger.set_log_level('INFO')
 
-#jaxON()
+jaxON()
 #numbaON()
-multiprocessingON(DEFAULTTHREADS)
+#multiprocessingON(DEFAULTTHREADS)
 
 @compile
 def square(x):

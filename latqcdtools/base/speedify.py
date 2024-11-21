@@ -13,7 +13,6 @@ try:
     HAS_JAX = True
     # Configure JAX
     os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
-    # os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.9'
 except ImportError:
     HAS_JAX = False
     logger.debug('JAX not found - GPU acceleration disabled')
