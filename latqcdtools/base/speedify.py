@@ -1,165 +1,207 @@
-# 
-# speedify.py                                                               
-# 
-# L. Altenkort, D. Clarke 
-# 
-# Some methods and classes to easily make python code faster. 
-#
-
 import os
 import numpy as np
-import concurrent.futures
-from latqcdtools.base.check import checkType
-import latqcdtools.base.logger as logger
 from numba import njit
 from numba.typed import List
+from typing import Any, Callable
+import multiprocessing as mp
+import latqcdtools.base.logger as logger
 
-
-# Resolve parallelizer dependencies
-DEFAULTPARALLELIZER = 'pathos.pools'
+# Import JAX if available
 try:
-    import pathos.pools
-except ModuleNotFoundError:
-    DEFAULTPARALLELIZER = 'concurrent.futures'
+    import jax.numpy as jnp
+    from jax import vmap, jit
+    HAS_JAX = True
+    # Configure JAX
+    os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+    # os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.9'
+except ImportError:
+    HAS_JAX = False
+    logger.debug('JAX not found - GPU acceleration disabled')
 
-
-COMPILENUMBA        = False
-MAXTHREADS          = os.cpu_count() 
-DEFAULTTHREADS      = MAXTHREADS - 2
-
+# Global configuration flags
+COMPILENUMBA = False
+COMPILEJAX = False
+USE_MULTIPROCESSING = False
+MAXTHREADS = os.cpu_count()
+DEFAULTTHREADS = max(1, MAXTHREADS - 2)
+NPROC = DEFAULTTHREADS
 
 def numbaON():
-    """ 
-    Use numba wherever possible. By default it is turned off, since compilation takes some time,
-    and hence you will only see a performance boost for particularly long-running functions. Must be
-    called at the beginning of your code. 
-    """
     global COMPILENUMBA
     COMPILENUMBA = True
     logger.info('Using numba to speed things up.')
 
-
 def numbaOFF():
-    """ 
-    Turn off numba compilation for small functions. 
-    """ 
     global COMPILENUMBA
-    COMPILENUMBA = False 
+    COMPILENUMBA = False
     logger.info('No longer using numba.')
 
+def jaxON():
+    if not HAS_JAX:
+        logger.warn('JAX not installed - cannot enable GPU acceleration')
+        return
+    global COMPILEJAX
+    COMPILEJAX = True
+    logger.info('Using JAX for GPU acceleration.')
 
-def compile(func):
-    global COMPILENUMBA
+def jaxOFF():
+    global COMPILEJAX
+    COMPILEJAX = False
+    logger.info('No longer using JAX.')
+
+def multiprocessingON(nproc=None):
+    global USE_MULTIPROCESSING, NPROC
+    USE_MULTIPROCESSING = True
+    if nproc is not None:
+        NPROC = min(max(1, nproc), MAXTHREADS)
+    logger.info(f'Using multiprocessing with {NPROC} processes.')
+
+def multiprocessingOFF():
+    global USE_MULTIPROCESSING
+    USE_MULTIPROCESSING = False
+    logger.info('No longer using multiprocessing.')
+
+def handle_jax_array(x: Any) -> Any:
+    """Safely convert arrays to JAX arrays"""
+    if HAS_JAX and isinstance(x, (np.ndarray, list, tuple)):
+        return jnp.asarray(x)
+    return x
+
+def handle_jax_args(args):
+    """Convert arguments to JAX arrays where appropriate"""
+    return tuple(handle_jax_array(arg) for arg in args)
+
+def handle_jax_kwargs(kwargs):
+    """Convert keyword arguments to JAX arrays where appropriate"""
+    return {k: handle_jax_array(v) for k, v in kwargs.items()}
+
+def _mp_worker(args):
+    """Worker function for multiprocessing"""
+    func, x, extra_args = args
+    return func(x, *extra_args)
+
+def compile(func: Callable) -> Callable:
+    """
+    Smart compiler that chooses between JAX, numba, or no compilation.
+    """
+    global COMPILEJAX, COMPILENUMBA
+    
+    if COMPILEJAX and HAS_JAX:
+        logger.info(f'JAX-compiling {func.__name__}')
+        try:
+            @jit
+            def jax_func(*args, **kwargs):
+                # Convert inputs to JAX arrays when possible
+                jax_args = handle_jax_args(args)
+                jax_kwargs = handle_jax_kwargs(kwargs)
+                
+                # Run the function with JAX arrays
+                result = func(*jax_args, **jax_kwargs)
+                
+                # Return as is - let the caller handle conversion if needed
+                return result
+                
+            def wrapped_func(*args, **kwargs):
+                try:
+                    return jax_func(*args, **kwargs)
+                except Exception as e:
+                    logger.warn(f"JAX execution failed: {str(e)}. Using original function.")
+                    return func(*args, **kwargs)
+                    
+            return wrapped_func
+            
+        except Exception as e:
+            logger.warn(f'JAX compilation failed: {str(e)}. Falling back to numba.')
+            
     if COMPILENUMBA:
-        logger.info('Compiling',func.__name__+'.')
+        logger.info(f'Numba-compiling {func.__name__}')
         return njit(func)
-    else:
-        return func
+        
+    return func
 
+def parallel_function_eval(function: Callable, input_array: Any, args=()) -> np.ndarray:
+    """
+    Parallelize function over input array using JAX or CPU multiprocessing.
+    """
+    # Try JAX first if enabled
+    if COMPILEJAX and HAS_JAX:
+        try:
+            # Convert inputs to JAX arrays
+            jax_input = jnp.asarray(input_array)
+            jax_args = handle_jax_args(args)
+            
+            # Define the mapped function
+            def mapped_func(x):
+                return function(x, *jax_args)
+            
+            # Use JAX's vmap
+            # Note: vmap is a vectorizing transformation, not a parallelization transformation. This batches the function over an array of inputs.
+            batched = vmap(mapped_func)
+            result = batched(jax_input)
+            
+            # Convert back to numpy if needed
+            return np.array(result)
+            
+        except Exception as e:
+            logger.warn(f'JAX parallelization failed: {str(e)}. Trying multiprocessing.')
+    
+    # Try multiprocessing if enabled
+    if USE_MULTIPROCESSING:
+        try:
+            with mp.Pool(NPROC) as pool:
+                mp_args = [(function, x, args) for x in input_array]
+                results = pool.map(_mp_worker, mp_args)
+            return np.array(results)
+        except Exception as e:
+            logger.warn(f'Multiprocessing failed: {str(e)}. Using sequential computation.')
+    
+    # Fallback to sequential computation
+    return np.array([function(x, *args) for x in input_array])
+
+def parallel_reduce(function: Callable, input_array: Any, args=()) -> Any:
+    """
+    Parallel reduction using JAX or CPU multiprocessing.
+    """
+    # Try JAX first if enabled
+    if COMPILEJAX and HAS_JAX:
+        try:
+            # Convert inputs to JAX arrays
+            jax_input = jnp.asarray(input_array)
+            jax_args = handle_jax_args(args)
+            
+            # Define the mapped function
+            def mapped_func(x):
+                return function(x, *jax_args)
+            
+            # Use JAX's vmap and sum
+            batched = vmap(mapped_func)
+            result = jnp.sum(batched(jax_input))
+            
+            # Convert back to numpy if needed
+            return np.array(result)
+            
+        except Exception as e:
+            logger.warn(f'JAX reduction failed: {str(e)}. Trying multiprocessing.')
+    
+    # Try multiprocessing if enabled
+    if USE_MULTIPROCESSING:
+        try:
+            with mp.Pool(NPROC) as pool:
+                mp_args = [(function, x, args) for x in input_array]
+                results = pool.map(_mp_worker, mp_args)
+            return np.sum(results)
+        except Exception as e:
+            logger.warn(f'Multiprocessing reduction failed: {str(e)}. Using sequential reduction.')
+    
+    # Fallback to sequential reduction
+    results = parallel_function_eval(function, input_array, args=args)
+    return np.sum(results)
 
 def numbaList(inList):
-    """ 
-    Turn a list into List that numba can parse. 
-    """ 
+    """Convert list to numba List type if numba is enabled"""
     global COMPILENUMBA
     if COMPILENUMBA:
         nList = List()
         [nList.append(x) for x in inList]
         return nList 
-    else:
-        return inList
-
-
-class ComputationClass:
-
-    def __init__(self, function, input_array, args, nproc, parallelizer):
-        """ 
-        This class contains everything needed to parallelize a function. It allows for you to
-        use your favorite parallelization library and pass arguments to the function.
-
-        Args:
-            function (func): to-be-parallelized function
-            input_array (array-like): run function over this array 
-            nproc (int): number of processors 
-            parallelizer (str): Which library should I use to parallelize?
-            *add_param: Pass any additional parameters as you would to the function
-        """
-        checkType(int,nproc=nproc)
-        checkType("array",input_array=input_array)
-        checkType(str,parallelizer=parallelizer)
-        self._input_array  = input_array
-        self._function     = function
-        self._parallelizer = parallelizer
-        self._args         = args
-        self._nproc        = nproc
-        logger.debug('Initializing')
-        logger.debug('input_array =',self._input_array)
-        logger.debug('args =',self._args)
-        logger.debug('parallelizer =',self._parallelizer)
-        if nproc > MAXTHREADS:
-            logger.warn('We recommend using fewer processes than',MAXTHREADS) 
-        self._result = self.parallelization_wrapper() # compute the result when class is initialized
-
-    def __repr__(self) -> str:
-        return "ComputationClass"
-
-    def parallelization_wrapper(self):
-        if self._nproc==1:
-            results = []
-            for i in self._input_array:
-                results.append(self.pass_argument_wrapper(i)) 
-        else:
-            if self._parallelizer=='concurrent.futures':
-                with concurrent.futures.ProcessPoolExecutor(max_workers=self._nproc) as executor:
-                    results=executor.map(self.pass_argument_wrapper, self._input_array)
-            elif self._parallelizer=='pathos.pools':
-                pool = pathos.pools.ProcessPool(processes=self._nproc)
-                results = pool.map(self.pass_argument_wrapper, self._input_array)
-                pool.close()
-                pool.join() 
-                pool.clear()
-            else:
-                logger.TBError('Unknown parallelizer',self._parallelizer)
-            results = list(results)
-        return results
-
-    def pass_argument_wrapper(self, single_input):
-        return self._function(single_input, *self._args)
-
-    def getResult(self):
-        return self._result
-
-
-def parallel_function_eval(function, input_array, args=(), nproc=DEFAULTTHREADS, parallelizer=DEFAULTPARALLELIZER):
-    """ 
-    Parallelize a function over an input_array. Effectively this can replace a loop over an array and should
-    lead to a performance boost.
-
-    Args:
-        function (func): to-be-parallelized function 
-        input_array (array-like): array over which it should run 
-        nproc (int): number of processes 
-
-    Returns:
-        array-like: func(input_array)
-    """
-    computer = ComputationClass(function, input_array, args=args, nproc=nproc, parallelizer=parallelizer)
-    if nproc==1:
-        logger.details('Using for-loop instead of',parallelizer)
-    return computer.getResult()
-
-
-def parallel_reduce(function, input_array, args=(), nproc=DEFAULTTHREADS, parallelizer=DEFAULTPARALLELIZER) -> float:
-    """ 
-    Parallelize a function over an input_array, then sum over the input_array elements. 
-
-    Args:
-        function (func): to-be-parallelized function 
-        input_array (array-like): array over which it should run 
-        nproc (int): number of processes 
-
-    Returns:
-        float
-    """
-    container = parallel_function_eval(function, input_array, nproc=nproc, args=args, parallelizer=parallelizer)
-    return np.sum(container)
+    return inList
