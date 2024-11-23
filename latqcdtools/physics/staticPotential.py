@@ -9,11 +9,7 @@
 
 import numpy as np
 import latqcdtools.base.logger as logger
-from latqcdtools.base.speedify import compile, jaxON, numbaON, multiprocessingON, DEFAULTTHREADS
-
-#jaxON()
-numbaON()
-#multiprocessingON(DEFAULTTHREADS)
+from latqcdtools.base.speedify import compile, numbaON, jaxON, multiprocessingON, DEFAULTTHREADS
 
 
 def V_Teq0(r) -> float:
