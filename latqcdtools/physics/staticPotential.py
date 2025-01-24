@@ -9,8 +9,10 @@
 
 import numpy as np
 import latqcdtools.base.logger as logger
-from numba import jit
+from latqcdtools.base.speedify import compile, compileON
 
+
+compileON()
 
 def V_Teq0(r) -> float:
     """ 
@@ -72,7 +74,7 @@ def impdist(Ns,r2max,improvedAction=True):
     else:
         cw = 0
 
-    @jit(nopython=True)
+    @compile
     def compiledImpDist():
         """ 
         Ported from code by O. Kaczmarek. 
