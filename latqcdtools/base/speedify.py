@@ -9,69 +9,87 @@
 import os
 import numpy as np
 import concurrent.futures
+from typing import Any, Callable
 from latqcdtools.base.check import checkType
 import latqcdtools.base.logger as logger
 from numba import njit
-from numba.typed import List
-
 
 # Resolve parallelizer dependencies
-DEFAULTPARALLELIZER = 'pathos.pools'
+DEFAULTPARALLELIZER = 'jax'
+try:
+    import jax
+except ModuleNotFoundError:
+    DEFAULTPARALLELIZER = 'pathos.pools'
 try:
     import pathos.pools
 except ModuleNotFoundError:
     DEFAULTPARALLELIZER = 'concurrent.futures'
 
+# Global configuration flags
+COMPILE = False
+MAXTHREADS = os.cpu_count()
+DEFAULTTHREADS = max(1, MAXTHREADS - 2)
 
-COMPILENUMBA        = False
-MAXTHREADS          = os.cpu_count() 
-DEFAULTTHREADS      = MAXTHREADS - 2
+def compileON():
+    global COMPILE
+    COMPILE = True
+    logger.info('Using JIT compilation to speed things up.')
+
+def compileOFF():
+    global COMPILE
+    COMPILE = False
+    logger.info('No longer using JIT compilation.')
+
+def handle_jax_array(x: Any) -> Any:
+    """Safely convert arrays to JAX arrays"""
+    if DEFAULTPARALLELIZER == 'jax' and isinstance(x, (np.ndarray, list, tuple)):
+        return jax.numpy.asarray(x)
+    return x
+
+def handle_jax_args(args):
+    """Convert arguments to JAX arrays where appropriate"""
+    return tuple(handle_jax_array(arg) for arg in args)
+
+def handle_jax_kwargs(kwargs):
+    """Convert keyword arguments to JAX arrays where appropriate"""
+    return {k: handle_jax_array(v) for k, v in kwargs.items()}
 
 
-def numbaON():
-    """ 
-    Use numba wherever possible. By default it is turned off, since compilation takes some time,
-    and hence you will only see a performance boost for particularly long-running functions. Must be
-    called at the beginning of your code. 
+def compile(func: Callable) -> Callable:
     """
-    global COMPILENUMBA
-    COMPILENUMBA = True
-    logger.info('Using numba to speed things up.')
-
-
-def numbaOFF():
-    """ 
-    Turn off numba compilation for small functions. 
-    """ 
-    global COMPILENUMBA
-    COMPILENUMBA = False 
-    logger.info('No longer using numba.')
-
-
-def compile(func):
-    global COMPILENUMBA
-    if COMPILENUMBA:
-        logger.info('Compiling',func.__name__+'.')
+    Smart compiler that chooses between JAX, numba, or no compilation.
+    """
+    global COMPILE
+    
+    if COMPILE and DEFAULTPARALLELIZER == 'jax':
+        logger.info(f'JAX-compiling {func.__name__}')
+        try:
+            @jax.jit
+            def jax_func(*args, **kwargs):
+                jax_args = handle_jax_args(args)
+                jax_kwargs = handle_jax_kwargs(kwargs)
+                result = func(*jax_args, **jax_kwargs)
+                return result
+                
+            def wrapped_func(*args, **kwargs):
+                try:
+                    return jax_func(*args, **kwargs)
+                except Exception as e:
+                    logger.warn(f"JAX execution failed: {str(e)}. Using original function.")
+                    return func(*args, **kwargs)
+                    
+            return wrapped_func
+            
+        except Exception as e:
+            logger.warn(f'JAX compilation failed: {str(e)}. Falling back to numba.')
+            
+    if COMPILE:
+        logger.info(f'Numba-compiling {func.__name__}')
         return njit(func)
-    else:
-        return func
-
-
-def numbaList(inList):
-    """ 
-    Turn a list into List that numba can parse. 
-    """ 
-    global COMPILENUMBA
-    if COMPILENUMBA:
-        nList = List()
-        [nList.append(x) for x in inList]
-        return nList 
-    else:
-        return inList
-
+        
+    return func
 
 class ComputationClass:
-
     def __init__(self, function, input_array, args, nproc, parallelizer):
         """ 
         This class contains everything needed to parallelize a function. It allows for you to
@@ -109,7 +127,15 @@ class ComputationClass:
             for i in self._input_array:
                 results.append(self.pass_argument_wrapper(i)) 
         else:
-            if self._parallelizer=='concurrent.futures':
+            if self._parallelizer=='jax':
+                jax_input = jax.numpy.asarray(self._input_array)
+                jax_args = handle_jax_args(self._args)
+                def mapped_func(x):
+                    return self._function(x, *jax_args)
+                batched = jax.vmap(mapped_func)
+                results = batched(jax_input)
+                results = np.array(results)
+            elif self._parallelizer=='concurrent.futures':
                 with concurrent.futures.ProcessPoolExecutor(max_workers=self._nproc) as executor:
                     results=executor.map(self.pass_argument_wrapper, self._input_array)
             elif self._parallelizer=='pathos.pools':
