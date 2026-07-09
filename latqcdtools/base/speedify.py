@@ -1,7 +1,7 @@
 # 
 # speedify.py                                                               
 # 
-# L. Altenkort, D. Clarke 
+# L. Altenkort, D. Clarke, K. Ebira
 # 
 # Some methods and classes to easily make python code faster. 
 #
@@ -19,15 +19,11 @@ HAVECUDA =True
 try:
     from numba import njit
     from numba.typed import List
-except ModuleNotFoundError:
-    HAVENUMBA=False
-except ImportError: 
+except ImportError:
     HAVENUMBA=False
 try:
     from numba import cuda 
-except ModuleNotFoundError:
-    HAVECUDA=False
-except ImportError: 
+except ImportError:
     HAVECUDA=False
 
 
@@ -35,7 +31,7 @@ except ImportError:
 DEFAULTPARALLELIZER = 'pathos.pools'
 try:
     import pathos.pools
-except ModuleNotFoundError:
+except ImportError:
     DEFAULTPARALLELIZER = 'concurrent.futures'
 
 

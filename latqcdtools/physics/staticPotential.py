@@ -7,7 +7,9 @@
 
 import numpy as np
 import latqcdtools.base.logger as logger
-from latqcdtools.base.speedify import numbaON, compile, compileCUDA, get_optimal_block_size
+from latqcdtools.base.speedify import HAVECUDA, numbaON, compile, compileCUDA, get_optimal_block_size
+if HAVECUDA:
+    from numba import cuda
 
 numbaON()
 
@@ -401,40 +403,19 @@ def _cpu_impdist(Ns, r2max, improvedAction=True):
 
     return compiled_impdist()
 
-def impdist(Ns, r2max, improvedAction=True):
+def _gpu_impdist(Ns, r2max, improvedAction=True):
     """
-    GPU-accelerated calculation of tree-level improved distances.
-    
-    Follows equation (3) of 10.1103/PhysRevD.90.074038.
-    Falls back to CPU implementation if CUDA is unavailable.
+    GPU implementation of improved distances calculation.
+    Used when CUDA is available.
 
     Args:
         Ns: Spatial extension of lattice
         r2max: Maximum squared distance to improve
-        improvedAction: Whether to use improved action (default: True)
+        improvedAction: Whether to use improved action
 
     Returns:
-        rimp: List of improved distances
-
-    Raises:
-        ValueError: If Ns <= 0 or r2max is too large
+        List of improved distances
     """
-    # Input validation
-    if not Ns > 0:
-        logger.TBError("Need Ns>0")
-        
-    if r2max > (Ns/2)**2:
-        logger.TBError("r2max is too large.")
-    
-    # Check if CUDA is available
-    try:
-        if not cuda.is_available():
-            logger.warn("CUDA not available, falling back to CPU implementation.")
-            return _cpu_impdist(Ns, r2max, improvedAction)
-    except:
-        logger.warn("CUDA not available, falling back to CPU implementation.")
-        return _cpu_impdist(Ns, r2max, improvedAction)
-
     # Set coefficients based on improved action
     cw = 1/3 if improvedAction else 0
     
@@ -450,15 +431,10 @@ def impdist(Ns, r2max, improvedAction=True):
     weight = np.zeros(3*Ns**2, dtype=np.int32)
     
     # Transfer data to device
-    try:
-        cosf_device = cuda.to_device(cosf)
-        sinf_device = cuda.to_device(sinf)
-        pots_device = cuda.to_device(pots)
-        weight_device = cuda.to_device(weight)
-    except Exception as e:
-        logger.warn("Error copying into device memory. Got exception:",e) 
-        logger.warn("Falling back to CPU implementation.")
-        return _cpu_impdist(Ns, r2max, improvedAction)
+    cosf_device = cuda.to_device(cosf)
+    sinf_device = cuda.to_device(sinf)
+    pots_device = cuda.to_device(pots)
+    weight_device = cuda.to_device(weight)
     
     # Get optimal threads per block
     threads_per_block = get_optimal_block_size()
@@ -472,15 +448,9 @@ def impdist(Ns, r2max, improvedAction=True):
     precompute_blocks = (Ns**3 + precompute_threads - 1) // precompute_threads
     
     # Launch kernel to precompute sine terms
-    try:
-        compute_sine_terms_kernel[precompute_blocks, precompute_threads](
-            sinf_device, cw, Ns, sine_terms_device
-        )
-    except Exception as e:
-        logger.warn('Kernel launch failed. Exception:')
-        logger.warn(e)
-        logger.warn("CUDA not available, falling back to CPU implementation.")
-        return _cpu_impdist(Ns, r2max, improvedAction)
+    compute_sine_terms_kernel[precompute_blocks, precompute_threads](
+        sinf_device, cw, Ns, sine_terms_device
+    )
 
     # Generate xyz points for first calculation phase
     xyz_points = []
@@ -558,5 +528,38 @@ def impdist(Ns, r2max, improvedAction=True):
             rimp.append(
                 1.0 / (4.0 * np.pi * (pots[i] / weight[i] + 0.22578/Ns))
             )
-    
+
     return rimp
+
+
+def impdist(Ns, r2max, improvedAction=True):
+    """
+    Calculation of tree-level improved distances. Follows equation (3) of
+    10.1103/PhysRevD.90.074038. Runs on the GPU when CUDA is available,
+    falling back to a CPU implementation otherwise.
+
+    Args:
+        Ns: Spatial extension of lattice
+        r2max: Maximum squared distance to improve
+        improvedAction: Whether to use improved action (default: True)
+
+    Returns:
+        rimp: List of improved distances
+    """
+    # Input validation
+    if not Ns > 0:
+        logger.TBError("Need Ns>0")
+    if r2max > (Ns/2)**2:
+        logger.TBError("r2max is too large.")
+
+    if not HAVECUDA:
+        logger.warn("numba.cuda not available, falling back to CPU implementation.")
+        return _cpu_impdist(Ns, r2max, improvedAction)
+    try:
+        if not cuda.is_available():
+            logger.warn("CUDA not available, falling back to CPU implementation.")
+            return _cpu_impdist(Ns, r2max, improvedAction)
+        return _gpu_impdist(Ns, r2max, improvedAction)
+    except Exception as e:
+        logger.warn("GPU impdist failed, falling back to CPU implementation. Exception:", e)
+        return _cpu_impdist(Ns, r2max, improvedAction)
