@@ -51,21 +51,22 @@ def tauint(nt,ts,xhat = None) -> np.ndarray:
         x=xhat
     else:
         x=std_mean(ts)
-    # Create array of autocovariance
-    acov=[]
-    for it in range(nt+1):
-        numt=ndat-it # number of pairs of time series elements separated by computer time it
-        c_it=0.
-        for i in range(numt):
-            c_it=c_it+(ts[i]-x)*(ts[i+it]-x)
-        c_it=c_it/numt
-        # Bias correction. This is needed for c(t) to be correct in the limit of uncorrelated data. In principle
-        # you don't know ahead of time whether your raw data are effectively correlated. The factor is ndat rather than
-        # ndat-it because ndat data points were used to calculate x, which is what matters for the bias.
-        if xhat is None:
-            c_it=c_it*ndat/(ndat-1.)
-        acov.append(c_it)
-    acov=np.array(acov)
+    # Create array of autocovariance. By the correlation theorem, irfft(|rfft(d)|^2)[it] gives the
+    # autocorrelation sum_i d[i]*d[i+it], where zero-padding to 2*ndat prevents wraparound. See
+    # Press et al., Numerical Recipes, 3rd ed., Cambridge University Press (2007), section 13.2.
+    # This is equivalent to the following code (but O(ndat*log(ndat)) instead of O(nt*ndat)):
+    #    acov=[]
+    #    for it in range(nt+1):
+    #        numt=ndat-it # number of pairs of time series elements separated by computer time it
+    #        acov.append( np.sum((ts[:numt]-x)*(ts[it:]-x))/numt )
+    d    = ts - x
+    acov = np.fft.irfft(np.abs(np.fft.rfft(d,2*ndat))**2)[:nt+1]
+    acov = acov/(ndat-np.arange(nt+1))
+    # Bias correction. This is needed for c(t) to be correct in the limit of uncorrelated data. In principle
+    # you don't know ahead of time whether your raw data are effectively correlated. The factor is ndat rather than
+    # ndat-it because ndat data points were used to calculate x, which is what matters for the bias.
+    if xhat is None:
+        acov=acov*ndat/(ndat-1.)
     # Calculate integrated autocorrelation time. This is equivalent to the following code:
     #    acint=[1.]
     #    for it in range(1,nt+1):
