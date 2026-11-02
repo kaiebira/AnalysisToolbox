@@ -3,7 +3,7 @@
 #
 # main_getTempAndSpacing.py
 #
-# D. Clarke
+# D. Clarke, K. Ebira, Google Antigravity
 #
 # Given an Nt, beta, and a reference scale, get a and T in physical units.
 #
@@ -11,7 +11,6 @@
 import argparse
 from latqcdtools.physics.lattice_params import latticeParams
 from latqcdtools.base.utilities import getArgs
-from latqcdtools.physics.referenceScales import CY_param, CY_phys 
 import latqcdtools.base.logger as logger
 
 logger.set_log_level('INFO')
@@ -35,15 +34,13 @@ beta       = args.beta
 scaleYear  = args.scaleYear
 paramYear  = args.paramYear
 
+if Nf is not None and Nf.strip().lower() in ('none', '0'):
+    Nf = None
+
 if args.Ns is None:
     Ns = 3*args.Nt
 else:
     Ns = args.Ns
-
-if paramYear is None:
-    paramYear = CY_param[scale]
-if scaleYear is None:
-    scaleYear = CY_phys[scale]
 
 lp = latticeParams(Ns, Nt, beta, Nf=Nf, mass1=None, mass2=None, scaleType=scale, paramYear=paramYear, scaleYear=scaleYear)
 
