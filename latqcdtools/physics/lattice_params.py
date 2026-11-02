@@ -1,7 +1,7 @@
 # 
 # lattice_params.py
 # 
-# D. Clarke, K. Ebira
+# D. Clarke, K. Ebira, Google Antigravity
 # 
 # Class to handle input parameters of lattice configs. This is in particular for use with the HotQCD collaboration.
 #

@@ -1,7 +1,7 @@
 # 
 # confWriter.py                                                               
 # 
-# K. Ebira, D. Clarke
+# K. Ebira, D. Clarke, Google Antigravity
 # 
 # Tools for writing gauge configurations in Python.
 #

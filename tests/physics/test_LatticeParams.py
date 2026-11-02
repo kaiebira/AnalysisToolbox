@@ -1,7 +1,7 @@
 # 
 # test_LatticeParams.py                                                               
 # 
-# D. Clarke, K. Ebira
+# D. Clarke, K. Ebira, Google Antigravity
 # 
 # Some tests of the lattice parameter class using 2021 scales.
 #

@@ -1,7 +1,7 @@
 # 
 # confReader.py                                                               
 # 
-# D. Clarke, K. Ebira
+# D. Clarke, K. Ebira, Google Antigravity
 # 
 # Tools for reading gauge configurations in Python. To interact with binary configurations, we can use
 # Python's built-in struct module. More info on that: https://docs.python.org/3.7/library/struct.html. NERSC reader inspired
@@ -338,6 +338,11 @@ class NERSCReader(confReader):
         dtype_str = f'{self.endianness}c{latprec}'
         vol = (self.Ns**3) * self.Nt
         total_elements = vol * self.Nd * self.rows * 3
+        expected_bytes = total_elements * latprec
+        if len(payload) % 4 != 0:
+            logger.TBRaise(f'Corrupt configuration {fileName}: payload length {len(payload)} is not a multiple of 4 bytes.')
+        if len(payload) != expected_bytes:
+            logger.TBRaise(f'Corrupt configuration {fileName}: expected {expected_bytes} payload bytes, got {len(payload)}.')
         raw = np.frombuffer(payload, dtype=dtype_str, count=total_elements)
 
         # Validate checksum against header if present
